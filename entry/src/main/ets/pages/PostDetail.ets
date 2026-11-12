@@ -1195,12 +1195,12 @@ export struct PostDetail {
   }
 
   private promotionPlan(): XXAuthPromotionPlan {
-    if (this.promotionPostJson.length === 0) { return new XXAuthPromotionPlan(); }
-    try {
-      const parsed: XXAuthPromotionPlan = JSON.parse(this.promotionPostJson) as XXAuthPromotionPlan;
-      if (parsed === null || !(parsed.posts instanceof Array)) { return new XXAuthPromotionPlan(); }
-      return parsed;
-    } catch (error) { return new XXAuthPromotionPlan(); }
+    // Ignore remote and previously published plans in this ad-free build.
+    const plan: XXAuthPromotionPlan = new XXAuthPromotionPlan();
+    plan.timelineCount = 0;
+    plan.commentCount = 0;
+    plan.commentProbability = 0;
+    return plan;
   }
 
   private hidePromotionPost(): void {

@@ -4,7 +4,7 @@ import { bundleManager, common } from '@kit.AbilityKit';
 import hilog from '@ohos.hilog';
 import { hdsEffect } from '@kit.UIDesignKit';
 import { HdsButton } from './HdsButton';
-import { XXAuthAnnouncement, XXAuthArticle, XXAuthBanner, XXAuthPanel, XXAuthPopupConfig,
+import { XXAuthAnnouncement, XXAuthArticle, XXAuthPanel, XXAuthPopupConfig,
   XXAuthResult, XXAuthVariable, XXAuthVersion, XXAuthVersionCheck } from '../models/XXAuth';
 import { xxAuthService } from '../services/XXAuthService';
 import { XXAuthPopupPolicy } from '../services/XXAuthPopupPolicy';
@@ -15,7 +15,7 @@ import { isRecommendationStoreUrl, parseRecommendationConfig, parseRecommendatio
   RecommendationConfig, RecommendationDescriptionSegment, RecommendationMode,
   RecommendationSnoozePrompt } from '../services/XXAuthRecommendation';
 import { XXAuthRecommendationAssets } from '../services/XXAuthRecommendationAssets';
-import { XXAuthPromotionPlan, XXAuthPromotionPostPolicy } from '../services/XXAuthPromotionPost';
+import { XXAuthPromotionPostPolicy } from '../services/XXAuthPromotionPost';
 import { XXAUTH_POPUP_CONFIG, XXAUTH_POPUP_REQUEST, XXAUTH_PROMOTION_POST,
   xxAuthPopupStore } from '../services/XXAuthPopupStore';
 import { APP_FONT_FAMILY_KEY, DEFAULT_APP_FONT_FAMILY } from '../services/AppFontStore';
@@ -83,6 +83,7 @@ export struct XXAuthPopupHost {
 
   aboutToAppear(): void {
     this.alive = true;
+    AppStorage.setOrCreate<string>(XXAUTH_PROMOTION_POST, '');
     this.lastRequest = this.popupRequest;
     this.refresh();
     this.poll = setInterval((): void => {
@@ -130,23 +131,10 @@ export struct XXAuthPopupHost {
     } else { this.refresh(); }
   }
 
-  // The timeline post is owned by this host so the feed never fetches the same
-  // configuration twice; consumers watch the published JSON.
+  // Clear the shared feed/comment campaign on every remote configuration refresh.
   private publishPromotionPost(items: XXAuthAnnouncement[], config: XXAuthPopupConfig): void {
-    if (config.post_dismissible !== false && xxAuthPopupStore.promotionSessionHidden()) {
-      AppStorage.setOrCreate<string>(XXAUTH_PROMOTION_POST, '');
-      return;
-    }
-    const plan: XXAuthPromotionPlan = xxAuthSupporterService.active() ?
-      new XXAuthPromotionPlan() : XXAuthPromotionPostPolicy.plan(items, config);
-    if (plan.posts.length === 0) { plan.timelineCount = 0; plan.commentCount = 0; }
-    const value: string = plan.timelineCount === 0 && plan.commentCount === 0 ? '' : JSON.stringify(plan);
-    const hidden: boolean = plan.dismissible && value.length > 0 &&
-      xxAuthPopupStore.promotionHiddenUntil(this.context(), value) > Date.now();
-    const published: string = hidden ? '' : value;
-    if ((AppStorage.get<string>(XXAUTH_PROMOTION_POST) ?? '') !== published) {
-      AppStorage.setOrCreate<string>(XXAUTH_PROMOTION_POST, published);
-    }
+    // Never publish feed/comment advertisements, even when the server forces them.
+    AppStorage.setOrCreate<string>(XXAUTH_PROMOTION_POST, '');
   }
 
   // The entitlement is bound to the X account, so a switch re-evaluates it
@@ -170,14 +158,12 @@ export struct XXAuthPopupHost {
       await xxAuthSupporterService.refresh(this.context());
       if (!this.alive) { return; }
       const announcementsTask: Promise<XXAuthResult<XXAuthAnnouncement[]>> = xxAuthService.announcements();
-      const bannersTask: Promise<XXAuthResult<XXAuthBanner[]>> = xxAuthService.banners();
       const articlesTask: Promise<XXAuthResult<XXAuthArticle[]>> = xxAuthService.articles();
       const variablesTask: Promise<XXAuthResult<XXAuthVariable[]>> = xxAuthService.variables();
       const configTask: Promise<XXAuthResult<Object>> = xxAuthService.variable(XXAUTH_POPUP_CONFIG);
       const checkTask: Promise<XXAuthResult<XXAuthVersionCheck>> = xxAuthService.checkVersion(
         this.versionName(), xxAuthPopupStore.deviceId(this.context()));
       const announcements: XXAuthResult<XXAuthAnnouncement[]> = await announcementsTask;
-      const banners: XXAuthResult<XXAuthBanner[]> = await bannersTask;
       const articles: XXAuthResult<XXAuthArticle[]> = await articlesTask;
       const variables: XXAuthResult<XXAuthVariable[]> = await variablesTask;
       const configResult: XXAuthResult<Object> = await configTask;
@@ -211,14 +197,13 @@ export struct XXAuthPopupHost {
         this.timer = -1;
       }
       this.currentConfig = config;
-      xxAuthSplashStore.refresh(this.context(),
-        announcements.ok && announcements.data instanceof Array && variables.ok && !xxAuthSupporterService.active() ?
-          announcements.data : [], config).catch((): void => {});
+      // Empty candidates clear the old splash cache without downloading ad assets.
+      xxAuthSplashStore.refresh(this.context(), [], config).catch((): void => {});
       const panels: XXAuthPanel[] = XXAuthPopupPolicy.startup(
         announcements.ok && announcements.data instanceof Array ? announcements.data : [],
-        banners.ok && banners.data instanceof Array ? banners.data : [],
+        [],
         articles.ok && articles.data instanceof Array ? articles.data : [], config).filter(
-          (item: XXAuthPanel): boolean => (!xxAuthSupporterService.active() || !XXAuthSupporterPolicy.promotional(item.kind)) &&
+          (item: XXAuthPanel): boolean => !XXAuthSupporterPolicy.promotional(item.kind) &&
             (item.kind !== 'recommendation' || !xxAuthSplashStore.wasShown(item.recommendationAppId)));
       this.publishPromotionPost(
         announcements.ok && announcements.data instanceof Array ? announcements.data : [], config);
@@ -280,15 +265,14 @@ export struct XXAuthPopupHost {
   }
 
   private async present(item: XXAuthPanel): Promise<void> {
-    if (item.kind === 'recommendation' && xxAuthSplashStore.wasShown(item.recommendationAppId)) { return; }
+    if (XXAuthSupporterPolicy.promotional(item.kind)) { return; }
     if (this.preparing) { return; }
-    if (xxAuthSupporterService.active() && XXAuthSupporterPolicy.promotional(item.kind)) { return; }
     this.preparing = true;
     try {
       const icon: string = item.structuredRecommendation ?
         await this.recommendationAssets().getLocalIcon(item.imageUrl) : '';
       if (!this.alive || this.visible || this.blocked || !this.appForeground || this.manualMode.length > 0 ||
-        (xxAuthSupporterService.active() && XXAuthSupporterPolicy.promotional(item.kind)) ||
+        XXAuthSupporterPolicy.promotional(item.kind) ||
         !this.pending.some((candidate: XXAuthPanel): boolean => candidate.fingerprint === item.fingerprint)) { return; }
       if (!xxAuthPopupStore.shouldShow(this.context(), item, Date.now(), this.currentConfig, this.readySince)) { return; }
       if (item.kind === 'recommendation' &&
@@ -315,6 +299,7 @@ export struct XXAuthPopupHost {
   }
 
   private async openManual(kind: string): Promise<void> {
+    if (XXAuthSupporterPolicy.promotional(kind)) { return; }
     this.manualMode = kind;
     this.panel = new XXAuthPanel();
     this.visible = true;

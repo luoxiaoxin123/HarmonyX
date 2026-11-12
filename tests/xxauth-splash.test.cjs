@@ -218,7 +218,7 @@ test('returning from the ad destination skips once, then normal foreground openi
   assert.equal(store.onForeground(), true, 'failed external launch cannot consume the next opening');
 });
 
-test('root mounts the actual launch cover on resume, preserves the current destination and avoids duplicate mounts', () => {
+test('root refuses foreground advertisements and preserves the current destination', () => {
   const source = fs.readFileSync(path.join(root, 'pages/Index.ets'), 'utf8').replace('struct Index', 'class Index');
   const tree = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true);
   const node = tree.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'Index');
@@ -232,9 +232,9 @@ test('root mounts the actual launch cover on resume, preserves the current desti
     startupFromForeground: false, currentTab: 2, contentDestinationOpen: true,
     externalShareRequest: '', isLargeScreen: () => false, navPathStack: {size: () => 1}});
   assert.equal(view.startupAdAllowed(), false, 'cold deep links retain their bypass');
-  view.onSplashOpenRequested(); assert.equal(view.showStartupCover, true);
-  assert.equal(view.startupFromForeground, true); assert.equal(view.currentTab, 2);
-  view.onSplashOpenRequested(); assert.equal(view.showStartupCover, true);
+  view.onSplashOpenRequested(); assert.equal(view.showStartupCover, false);
+  assert.equal(view.startupFromForeground, false); assert.equal(view.currentTab, 2);
+  view.onSplashOpenRequested(); assert.equal(view.showStartupCover, false);
   view.showStartupCover = false; view.startupFromForeground = false; view.showLoginSheet = true;
   view.onSplashOpenRequested(); assert.equal(view.showStartupCover, false);
   view.showLoginSheet = false; view.externalShareRequest = 'incoming-share';

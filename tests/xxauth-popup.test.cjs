@@ -334,7 +334,7 @@ function hostMethods(names, dependencies) {
   return new Function(...Object.keys(dependencies),code+';return Host;')(...Object.values(dependencies));
 }
 
-test('a locked published plan ignores both previously saved session and seven-day hides', () => {
+test('a locked remote campaign is cleared regardless of saved dismissal state', () => {
   const promotion=load('services/XXAuthPromotionPost');
   let published='unset';
   const Host=hostMethods(['publishPromotionPost'],{
@@ -345,7 +345,7 @@ test('a locked published plan ignores both previously saved session and seven-da
   const host=Object.assign(new Host(),{context:()=>({})});
   const rows=[{id:'post',priority:15,status:1,content:'帖子昵称：推荐\n帖子正文：推荐内容'}];
   host.publishPromotionPost(rows,{post_dismissible:false});
-  assert.equal(JSON.parse(published).dismissible,false);
+  assert.equal(published,'','remote locks cannot enable ads in this build');
   host.publishPromotionPost(rows,{post_dismissible:true});
   assert.equal(published,'');
   host.publishPromotionPost(rows,{post_dismissible:false,enabled:false});

@@ -1515,13 +1515,8 @@ struct Index {
   }
 
   private startupAdAllowed(): boolean {
-    if (crashDiagnostics.pendingReport()) { return false; }
-    return !this.showOnboardingGuide && !this.showLoginSheet && !this.showChatUnlock &&
-      !this.showMidAutumnGreeting && !this.photoOverlayOpen && !this.showLinkPreview &&
-      !this.showSpacePreview && !this.showPauseTopics && !this.showFollowingOrder && !this.showHomeSourceOptions &&
-      !(this.showSideDrawer && !this.isLargeScreen()) && this.externalShareRequest.length === 0 &&
-      (this.startupFromForeground || (this.currentTab === HOME_TAB_INDEX &&
-        !this.contentDestinationOpen && this.navPathStack.size() === 0));
+    // Also blocks foreground ads and campaigns cached by an older installation.
+    return false;
   }
 
   private onSplashOpenRequested(): void {
@@ -2743,12 +2738,12 @@ struct Index {
   }
 
   private promotionPlan(): XXAuthPromotionPlan {
-    if (this.promotionPostJson.length === 0) { return new XXAuthPromotionPlan(); }
-    try {
-      const parsed: XXAuthPromotionPlan = JSON.parse(this.promotionPostJson) as XXAuthPromotionPlan;
-      if (parsed === null || !(parsed.posts instanceof Array)) { return new XXAuthPromotionPlan(); }
-      return parsed;
-    } catch (error) { return new XXAuthPromotionPlan(); }
+    // Ignore remote and previously published plans in this ad-free build.
+    const plan: XXAuthPromotionPlan = new XXAuthPromotionPlan();
+    plan.timelineCount = 0;
+    plan.commentCount = 0;
+    plan.commentProbability = 0;
+    return plan;
   }
 
   // The search timeline is a plain ForEach, so the rows are planned per query:

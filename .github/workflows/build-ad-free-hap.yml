@@ -1,0 +1,95 @@
+name: Build ad-free HarmonyX HAP
+on:
+  push:
+    branches: [codex/remove-ads-v3.9.0]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: ad-free-hap-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install native tool dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libgl1 libxrender1 libxtst6 libxi6
+      - name: Set up HarmonyOS API 26
+        id: sdk
+        uses: ErBWs/setup-ohos@4dbb63025116eb6165ceac58a4bf47cbdc5ac721 # v2; verifies the SDK archive SHA-256
+        with:
+          version: 26.0.0.821
+          cache: false
+      - name: Run ad-removal regression tests
+        id: tests
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/harmonyx-test-tools" --no-package-lock --no-save typescript@5.9.3
+          export HARMONYX_TYPESCRIPT="$RUNNER_TEMP/harmonyx-test-tools/node_modules/typescript/lib/typescript.js"
+          node --test tests/ad-free-build.test.cjs tests/xxauth-promotion-post.test.cjs \
+            tests/xxauth-popup.test.cjs tests/xxauth-splash.test.cjs tests/xxauth-supporter.test.cjs \
+            tests/home-timeline-sources.test.cjs tests/home-tab-feed-regression.test.cjs \
+            tests/search-feed-parity.test.cjs tests/settings-catalog.test.cjs > "$RUNNER_TEMP/harmonyx-tests.log" 2>&1
+      - name: Build and validate unsigned HAP
+        id: hap
+        shell: bash
+        run: ./scripts/build-ad-free-hap.sh > "$RUNNER_TEMP/harmonyx-build.log" 2>&1
+      - name: Upload HAP and checksum
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: HarmonyX-v3.9.0-no-ads-unsigned
+          path: build/ad-free/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-logs
+          path: |
+            ${{ runner.temp }}/harmonyx-tests.log
+            ${{ runner.temp }}/harmonyx-build.log
+          if-no-files-found: ignore
+          retention-days: 14
+      # The cloud task has Git access but no GitHub API access. A separate report
+      # branch makes the run observable without a personal access token.
+      - name: Publish build status for unattended monitoring
+        if: always() && !cancelled()
+        shell: bash
+        env:
+          RESULT: ${{ job.status }}
+          SDK_RESULT: ${{ steps.sdk.outcome }}
+          TEST_RESULT: ${{ steps.tests.outcome }}
+          HAP_RESULT: ${{ steps.hap.outcome }}
+        run: |
+          mkdir -p .github/build-results
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          text = '# Ad-free HAP build\n\n'
+          text += 'Source commit: ' + os.environ['GITHUB_SHA'] + '\n\n'
+          text += 'Run: ' + os.environ['GITHUB_SERVER_URL'] + '/' + os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID'] + '\n\n'
+          for key in ['RESULT', 'SDK_RESULT', 'TEST_RESULT', 'HAP_RESULT']:
+              text += key + ': ' + os.environ.get(key, '') + '\n\n'
+          for name in ['harmonyx-tests.log', 'harmonyx-build.log']:
+              log = Path(os.environ['RUNNER_TEMP']) / name
+              if log.exists():
+                  text += '## ' + name + '\n\n```text\n' + '\n'.join(log.read_text(errors='replace').splitlines()[-200:])[-30000:] + '\n```\n\n'
+          Path('.github/build-results/latest.md').write_text(text)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(text)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/build-results/latest.md
+          git commit -m "ci: record unsigned HAP build ${GITHUB_RUN_ID}"
+          git push origin HEAD:refs/heads/codex/hap-build-status --force
